@@ -50,4 +50,4 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 详细对比见 `reports/stage3_comparison.json` 与 `reports/obsidian/summaries/`。
 
 ---
-*私有仓库 · 未公开*
+*公开仓库 · 欢迎使用与改进*

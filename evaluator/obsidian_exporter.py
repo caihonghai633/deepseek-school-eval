@@ -9,6 +9,8 @@
 * ``runs/``：每个不可变 ``run_id`` 一条笔记，包含耗时、Token、成本、检查结果
   和指向报告/版本汇总的双链；
 * ``index.md``：Obsidian 首页，使用 ``[[wikilink]]`` 连接上述内容。
+* 自动发现本机 Obsidian Vault，并同步到 ``AE-01_School_Agent_Eval/``；同步副本
+  同时包含原始 JSONL、raw_result 和真实 ``.docx``，保证 Vault 内链路闭合。
 
 所有输入都按 UTF-8 读取，路径由 ``pathlib.Path`` 处理。导出失败不会修改原始
 运行记录；Analyzer 可在汇总完成后调用 :func:`export_analysis_notes` 完成自动化。
@@ -20,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -28,11 +31,46 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_NAME = "AE-01_School_Agent_Eval"
 DEFAULT_TAGS = ("ai_eval", "agent", "school_office")
+VAULT_ARCHIVE_DIR = "AE-01_School_Agent_Eval"
 
 
 def _as_path(path: str | Path, *, base: Path = ROOT) -> Path:
     value = Path(path)
     return value if value.is_absolute() else base / value
+
+
+def discover_obsidian_vault() -> Path | None:
+    """自动发现本机 Vault；支持 ``OBSIDIAN_VAULT_PATH`` 显式覆盖。"""
+
+    configured = os.getenv("OBSIDIAN_VAULT_PATH")
+    if configured:
+        candidate = Path(configured).expanduser().resolve()
+        if (candidate / ".obsidian").is_dir():
+            return candidate
+    home = Path.home()
+    workspace_user = ROOT.parents[1] if len(ROOT.parents) > 1 else ROOT
+    search_roots = [
+        ROOT,
+        workspace_user / "Documents",
+        workspace_user / "Desktop",
+        home / "Documents",
+        home / "Desktop",
+    ]
+    candidates: list[Path] = []
+    for base in search_roots:
+        if not base.exists():
+            continue
+        if (base / ".obsidian").is_dir():
+            candidates.append(base)
+        try:
+            candidates.extend(item.parent for item in base.glob("*/.obsidian") if item.is_dir())
+        except OSError:
+            continue
+    candidates = sorted(
+        set(candidates),
+        key=lambda path: ("obsidian vault" not in path.name.lower(), path.as_posix()),
+    )
+    return candidates[0] if candidates else None
 
 
 def _safe_filename(value: str, fallback: str = "note") -> str:
@@ -203,6 +241,73 @@ def _update_source_report_links(report_path: str | Path, results: Iterable[dict[
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(updated, encoding="utf-8", newline="\n")
     return path.as_posix()
+
+
+def sync_to_obsidian_vault(
+    *,
+    source_dir: str | Path,
+    results: Iterable[dict[str, Any]],
+    vault_path: str | Path | None = None,
+    archive_dir_name: str = VAULT_ARCHIVE_DIR,
+) -> dict[str, Any]:
+    """把导出笔记和引用的原始产物同步到 Vault 内的独立目录。
+
+    目标目录是新建的项目归档目录，不删除 Vault 中任何已有文件。Markdown 中
+    原本指向工作区的相对路径会按 Vault 内目录布局重写：报告指向 ``runs/``，
+    运行笔记指向同级的 ``raw_result.json`` 和 ``raw_results.jsonl``。
+    """
+
+    source = _as_path(source_dir)
+    vault = Path(vault_path).expanduser().resolve() if vault_path else discover_obsidian_vault()
+    if vault is None:
+        return {"status": "vault_not_found", "source_dir": source.as_posix(), "vault_path": None, "files_copied": 0}
+    destination = vault / archive_dir_name
+    destination.mkdir(parents=True, exist_ok=True)
+    copied = 0
+
+    for source_file in source.rglob("*.md"):
+        relative = source_file.relative_to(source)
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = source_file.read_text(encoding="utf-8")
+        # 让 Vault 内的 Markdown 链接保持闭合，不再指向 Desktop 工作区。
+        if relative.parts and relative.parts[0] == "runs":
+            text = text.replace("../../../runs/", "")
+        else:
+            text = text.replace("../../runs/", "runs/").replace("../runs/", "runs/")
+        target.write_text(text, encoding="utf-8", newline="\n")
+        copied += 1
+
+    # 原始 JSONL 是全局索引；逐次 raw_result 和 docx 与笔记保持同样的 runs/布局。
+    raw_index = ROOT / "runs" / "raw_results.jsonl"
+    if raw_index.exists():
+        target_index = destination / "runs" / "raw_results.jsonl"
+        target_index.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(raw_index, target_index)
+        copied += 1
+    for result in results:
+        run_id = str(result.get("run_id", "unknown-run"))
+        source_run = ROOT / "runs" / run_id
+        target_run = destination / "runs" / run_id
+        raw_result = source_run / "raw_result.json"
+        if raw_result.exists():
+            target_run.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(raw_result, target_run / "raw_result.json")
+            copied += 1
+        for raw_docx in result.get("whitebox_trace", {}).get("generated_docx_paths", []):
+            docx_path = _resolve_artifact_path(str(raw_docx))
+            if not docx_path.exists() or docx_path.suffix.lower() != ".docx":
+                continue
+            target_docx = target_run / "artifacts" / docx_path.name
+            target_docx.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(docx_path, target_docx)
+            copied += 1
+    return {
+        "status": "synced",
+        "vault_path": vault.as_posix(),
+        "archive_path": destination.as_posix(),
+        "files_copied": copied,
+    }
 
 
 def _render_run_body(
@@ -511,6 +616,7 @@ def export_analysis_notes(
 - 原始 JSONL：`runs/raw_results.jsonl`
 """
         _write_note(index_path, frontmatter=index_frontmatter, body=index_body)
+        vault_sync = sync_to_obsidian_vault(source_dir=destination, results=results)
 
         return {
             "output_dir": destination.as_posix(),
@@ -520,6 +626,7 @@ def export_analysis_notes(
             "index_note": index_path.as_posix(),
             "summary_run_ids": summary_run_ids,
             "run_note_count": len(run_note_paths),
+            "vault_sync": vault_sync,
         }
     finally:
         PROJECT_NAME = previous_project
