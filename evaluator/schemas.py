@@ -109,6 +109,11 @@ class PlatformDeliveryCheckSchema(StrictSchema):
 class CheckCriteriaSchema(StrictSchema):
     """不依赖模型主观判断的检查清单。"""
 
+    # 按任务类型选择工作流，缺省时由 Agent 根据历史检查契约兼容推断。
+    # answer_only：只回答；generate_only：生成并校验本地文档；
+    # generate_and_send：校验通过且获授权后才允许平台投递。
+    workflow: Literal["answer_only", "generate_only", "generate_and_send"] | None = None
+    send_authorized: bool | None = None
     required_tool_order: list[str] = Field(default_factory=list)
     tool_parameter_constraints: dict[str, dict[str, Any]] = Field(
         default_factory=dict

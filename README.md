@@ -49,5 +49,22 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 
 详细对比见 `reports/stage3_comparison.json` 与 `reports/obsidian/summaries/`。
 
+## 任务类型工作流约束
+
+Agent 不再把所有请求强制编排成同一条调用链。`check_criteria.workflow` 可声明：
+
+- `answer_only`：只回答问题，禁止生成文档和平台投递；
+- `generate_only`：允许生成并真实解析 `.docx`，文档通过后结束，禁止投递；
+- `generate_and_send`：必须先生成并通过文档检查，再在 `send_authorized: true`
+  时投递并验证回执。
+
+策略由 `sut/workflows.py` 统一执行，API Function Calling 和离线降级路径都经过
+同一 `dispatch_tool` 闸门。被阻止的调用返回 `error=workflow_guard` 的结构化结果，
+不会进入底层发送工具；旧用例未声明工作流时按原有检查契约兼容推断。回归测试：
+
+```bash
+python -m pytest -q
+```
+
 ---
 *公开仓库 · 欢迎使用与改进*

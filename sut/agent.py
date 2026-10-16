@@ -19,6 +19,7 @@ from openai import OpenAI
 
 from sut.rag_engine import from_config
 from sut.tools import CHAPTERS, ToolRuntime
+from sut.workflows import WorkflowController
 
 
 TOOL_DEFINITIONS = [
@@ -116,10 +117,22 @@ class SchoolOfficeAgent:
         )
         self.offline = offline
         self._api_error: str | None = None
+        # 每次 run_case 开始时绑定；保留 None 以兼容单元测试直接调用
+        # dispatch_tool 的旧行为，但正常 API/离线路径都必须经过工作流闸门。
+        self.workflow_controller: WorkflowController | None = None
+
+    def prepare_workflow(self, case: dict[str, Any]) -> WorkflowController:
+        """根据用例契约创建本次运行的任务类型策略。"""
+
+        self.workflow_controller = WorkflowController.from_case(
+            case, root=self.root, run_dir=self.run_dir
+        )
+        return self.workflow_controller
 
     def run_case(self, case: dict[str, Any]) -> AgentRun:
         """执行一条 TestCaseSchema 字典并返回模型指标。"""
 
+        self.prepare_workflow(case)
         if self.offline or not os.getenv("DEEPSEEK_API_KEY"):
             return self._fallback(case)
 
@@ -143,7 +156,12 @@ class SchoolOfficeAgent:
 
     def _run_with_deepseek(self, case: dict[str, Any]) -> AgentRun:
         system_prompt = self.config.get("system_prompt", {}).get("text", "")
-        system_prompt += "\n执行要求：优先使用最少的必要工具调用；只保存本地的用例绝不调用发送工具；完成真实文件和回执校验后直接答复。"
+        workflow_description = self.workflow_controller.describe() if self.workflow_controller else {}
+        system_prompt += (
+            "\n执行要求：先识别任务工作流，只调用该工作流允许的工具；"
+            "只保存本地的用例绝不调用发送工具；完成真实文件和回执校验后直接答复。"
+            f"\n本次工作流策略：{json.dumps(workflow_description, ensure_ascii=False)}"
+        )
         if self.config.get("version_tag") == "V3":
             system_prompt += (
                 "\nV3 强制工具契约：调用 generate_docx_plan 前必须显式提取 title、grade、"
@@ -234,12 +252,22 @@ class SchoolOfficeAgent:
         if method is None:
             self.runtime.record_tool(name, arguments, "validation_error", {"error": "unknown_tool"})
             return {"status": "validation_error", "error": f"unknown tool: {name}"}
+        if self.workflow_controller is not None:
+            workflow_error = self.workflow_controller.before_tool(name, arguments)
+            if workflow_error:
+                # 记录为被阻断的尝试，而不是调用底层工具；这让检查器能区分
+                # “模型请求过副作用”与“平台真的收到投递”。
+                self.runtime.record_tool(name, arguments, "validation_error", workflow_error)
+                return workflow_error
         validation_error = self._validate_tool_arguments(name, arguments)
         if validation_error:
             self.runtime.record_tool(name, arguments, "validation_error", {"error": validation_error})
             return {"status": "validation_error", "error": validation_error}
         try:
-            return method(**arguments)
+            result = method(**arguments)
+            if self.workflow_controller is not None and isinstance(result, dict):
+                self.workflow_controller.after_tool(name, arguments, result)
+            return result
         except TypeError as exc:
             self.runtime.record_tool(name, arguments, "validation_error", {"error": str(exc)})
             return {"status": "validation_error", "error": str(exc)}
@@ -288,6 +316,7 @@ class SchoolOfficeAgent:
 
         text = "\n".join(turn.get("content", "") for turn in case["conversation_turns"])
         criteria = case["check_criteria"]
+        controller = self.workflow_controller or self.prepare_workflow(case)
         expected_ids = criteria.get("expected_recall_rule_ids", [])
         seed_values = case.get("pre_conditions", {}).get("memory_seed", [])
         for memory in seed_values:
@@ -299,40 +328,72 @@ class SchoolOfficeAgent:
         # 需要严格链路的用例即使没有 seed，也先执行一次可审计的偏好读取。
         # 这不会改变业务结果，但能验证“先查记忆”的工具顺序契约。
         required_order = criteria.get("required_tool_order", [])
-        if "memory.read" in required_order and not memory_keys:
+        if "memory.read" in required_order and not memory_keys and controller.name != "answer_only":
             memory_keys = ["teacher_preferences"]
         for key in memory_keys:
-            self.runtime.read_memory("fallback-session", key)
-        if any(injection.get("type") == "memory.write" for injection in self.runtime.injections) or "写入" in text:
-            self.runtime.write_memory("fallback-session", "runtime_preference", "按本次用例保留的偏好")
+            self.dispatch_tool("read_memory", {"session_id": "fallback-session", "key": key})
+        if (
+            controller.name != "answer_only"
+            and (any(injection.get("type") == "memory.write" for injection in self.runtime.injections) or "写入" in text)
+        ):
+            self.dispatch_tool(
+                "write_memory",
+                {"session_id": "fallback-session", "key": "runtime_preference", "value": "按本次用例保留的偏好"},
+            )
 
-        query = " ".join([text, *expected_ids])
-        self.runtime.search_rules(query)
+        # 纯问答任务不被强制套入文档链路；如用例明确要求规则证据，仍可执行
+        # search_rules，但不会因此触发文档生成或平台副作用。
+        if controller.name != "answer_only" or expected_ids or "rag.search" in required_order:
+            query = " ".join([text, *expected_ids])
+            self.dispatch_tool("search_rules", {"query": query})
+
         is_error_case = case["category"] == "异常输入与冲突恢复"
         missing_info = any(marker in text for marker in ["缺少", "还没决定", "课题还是先空着", "无法确认", "口头称呼"])
-        conflict_only = "冲突" in text or "忽略所有学校规则" in text or "省略见习" in text
 
         generated: dict[str, Any] | None = None
-        if not (is_error_case and (missing_info or conflict_only)):
+        inspected: dict[str, Any] | None = None
+        title: str | None = None
+        # 缺少关键字段时追问而不是臆造文件；安全/规则冲突仍允许生成一份
+        # 合规替代方案，最终内容和规则证据由检查器审计。
+        if controller.name != "answer_only" and not (is_error_case and missing_info):
             title_match = re.search(r"《([^》]+)》", text)
             title = title_match.group(1) if title_match else "学校教学活动方案"
             grade_match = re.search(r"([一二三四五六七八九十]+年级)", text)
             grade = grade_match.group(1) if grade_match else "待确认年级"
             duration_match = re.search(r"(\d+)\s*分钟", text)
             duration = int(duration_match.group(1)) if duration_match else 45
-            generated = self.runtime.generate_docx_plan(
-                title=title,
-                grade=grade,
-                duration_mins=duration,
-                teaching_steps=[{"name": "导入与目标确认"}, {"name": "规范约束下的探究活动"}, {"name": "总结与作业"}],
-                lesson_objectives="依据用户要求完成本课目标，并保留可观察的学习证据。",
-                safety_notes="遵守已召回学校安全规则；涉及伤病、危化品或天气风险时采用安全替代方案。",
+            generated = self.dispatch_tool(
+                "generate_docx_plan",
+                {
+                    "title": title,
+                    "grade": grade,
+                    "duration_mins": duration,
+                    "teaching_steps": [
+                        {"name": "导入与目标确认"},
+                        {"name": "规范约束下的探究活动"},
+                        {"name": "总结与作业"},
+                    ],
+                    "lesson_objectives": "依据用户要求完成本课目标，并保留可观察的学习证据。",
+                    "safety_notes": "遵守已召回学校安全规则；涉及伤病、危化品或天气风险时采用安全替代方案。",
+                },
             )
             if generated.get("status") == "success":
-                self.runtime.inspect_docx(generated["file_path"], criteria["docx_artifact_checks"].get("expected_chapter_titles", CHAPTERS))
+                inspected = self.dispatch_tool(
+                    "inspect_docx",
+                    {
+                        "file_path": generated["file_path"],
+                        "required_chapters": criteria["docx_artifact_checks"].get("expected_chapter_titles", CHAPTERS),
+                    },
+                )
 
-        should_send = any("send" in item or "verify_receipt" in item for item in criteria.get("required_tool_order", []))
-        if should_send and generated and generated.get("status") == "success" and not (is_error_case and (missing_info or conflict_only)):
+        should_send = controller.name == "generate_and_send"
+        if (
+            should_send
+            and generated
+            and generated.get("status") == "success"
+            and inspected
+            and inspected.get("status") == "success"
+        ):
             department = criteria.get("platform_delivery_checks", {}).get("expected_recipient", "教务处李老师")
             department_name = criteria.get("platform_delivery_checks", {}).get("platform_name", "教学管理平台")
             if "年级" in department_name or "年级" in text or "GRADE-" in text.upper():
@@ -354,9 +415,9 @@ class SchoolOfficeAgent:
             }
             sent = self.dispatch_tool("send_to_platform", send_args)
             if sent.get("status") == "accepted":
-                self.runtime.verify_receipt(sent.get("receipt_id"))
+                self.dispatch_tool("verify_receipt", {"request_id": sent.get("receipt_id")})
 
-        output_text = "已执行离线确定性编排；请以生成的真实文件、工具 Trace 和平台回执为准。"
+        output_text = f"已按 {controller.name} 工作流执行离线确定性编排；请以真实文件、工具 Trace 和平台回执为准。"
         if self._api_error:
             output_text += f" API 调用异常已记录：{self._api_error}"
         chars = sum(len(str(turn.get("content", ""))) for turn in case["conversation_turns"])

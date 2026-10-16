@@ -55,6 +55,60 @@ def check_tool_selection(criteria: dict[str, Any], trace: dict[str, Any]) -> dic
     return _check("tool_selection_passed", passed, expected, observed, "whitebox_trace.tool_calls")
 
 
+def check_workflow_constraints(criteria: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
+    """验证显式任务工作流没有产生未授权的副作用调用。
+
+    旧用例没有 ``workflow`` 字段时返回兼容通过；新用例则同时检查运行时工具
+    名称和返回状态，避免把“被 Agent 请求但被闸门拦截”误报为真实交付成功。
+    """
+
+    workflow = criteria.get("workflow") or criteria.get("workflow_type")
+    calls = _tool_calls(trace)
+    observed = [str(call.get("name")) for call in calls]
+    if not workflow:
+        return _check("workflow_constraints_passed", True, "legacy_inference", observed, "未显式声明 workflow，保持历史契约")
+
+    forbidden_by_workflow = {
+        "answer_only": {"document.generate_docx", "document.inspect_docx", "academic_affairs.send", "academic_affairs.verify_receipt"},
+        "generate_only": {"academic_affairs.send", "academic_affairs.verify_receipt"},
+        "generate_and_send": set(),
+    }
+    forbidden = [
+        name for call, name in zip(calls, observed)
+        if name in forbidden_by_workflow.get(workflow, set()) and not _is_workflow_guard(call)
+    ]
+    blocked = [
+        name for call, name in zip(calls, observed)
+        if name in forbidden_by_workflow.get(workflow, set()) and _is_workflow_guard(call)
+    ]
+    reasons: list[str] = []
+    if forbidden:
+        reasons.append(f"工作流 {workflow} 禁止调用: {forbidden}")
+
+    inspect_success = any(
+        call.get("name") == "document.inspect_docx" and call.get("return_status") == "success"
+        for call in calls
+    )
+    successful_sends = [
+        call for call in calls
+        if call.get("name") == "academic_affairs.send" and call.get("return_status") == "success"
+    ]
+    if workflow == "generate_and_send":
+        if criteria.get("send_authorized") is False and successful_sends:
+            reasons.append("send_authorized=false 时不应有成功投递")
+        if successful_sends and not inspect_success:
+            reasons.append("文档检查未成功即发生平台投递")
+
+    passed = not reasons
+    return _check(
+        "workflow_constraints_passed",
+        passed,
+        {"workflow": workflow, "forbidden_tools": sorted(forbidden_by_workflow.get(workflow, set()))},
+        {"observed_tools": observed, "blocked_tools": blocked, "successful_send_count": len(successful_sends), "reasons": reasons},
+        "whitebox_trace.tool_calls + workflow policy",
+    )
+
+
 def _value_matches(observed: Any, expected: Any) -> bool:
     if isinstance(expected, dict):
         if not isinstance(observed, dict):
@@ -114,7 +168,12 @@ def check_tool_args(criteria: dict[str, Any], trace: dict[str, Any]) -> dict[str
                     failures.append(f"{tool_name}.{key}={parameters.get(key)!r} != {expected!r}")
             elif key not in {"output_dir", "min_files", "all_extension", "required_chapter_count", "must_fail_if_missing", "max_retries"}:
                 failures.append(f"{tool_name} 缺少参数 {key}")
-    passed = not failures and all(call.get("return_status") != "validation_error" for call in calls)
+    # 工作流闸门返回 validation_error 是预期的安全拒绝，不应被误判为
+    # 参数格式错误；真正进入工具边界的 validation_error 仍然使本项失败。
+    passed = not failures and all(
+        call.get("return_status") != "validation_error" or _is_workflow_guard(call)
+        for call in calls
+    )
     return _check("tool_args_passed", passed, constraints, {"calls": observed, "failures": failures}, "whitebox_trace.tool_calls.parameters")
 
 
@@ -182,12 +241,23 @@ def _response_json(call: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
+def _is_workflow_guard(call: dict[str, Any]) -> bool:
+    """返回调用是否被工作流闸门拦截，而非进入底层业务工具。"""
+
+    return call.get("return_status") == "validation_error" and _response_json(call).get("error") == "workflow_guard"
+
+
 def check_delivery_status(criteria: dict[str, Any], trace: dict[str, Any]) -> dict[str, Any]:
     platform = criteria.get("platform_delivery_checks", {})
     expected_statuses = list(platform.get("success_status_values", []))
     if expected_statuses == ["not_sent"] and not platform.get("require_receipt_id", False):
         calls = _tool_calls(trace)
-        unexpected = [call.get("name") for call in calls if call.get("name") in {"academic_affairs.send", "send_to_platform", "academic_affairs.verify_receipt"}]
+        unexpected = [
+            call.get("name")
+            for call in calls
+            if call.get("name") in {"academic_affairs.send", "send_to_platform", "academic_affairs.verify_receipt"}
+            and not _is_workflow_guard(call)
+        ]
         return _check("delivery_status_passed", not unexpected, "not_sent", {"status": "not_sent", "unexpected_calls": unexpected}, "用例明确要求只保存本地")
     calls = _tool_calls(trace)
     delivery_calls = [call for call in calls if call.get("name") in {"academic_affairs.send", "send_to_platform", "academic_affairs.verify_receipt"}]
@@ -222,7 +292,10 @@ def diagnose_failure(checks: list[dict[str, Any]], trace: dict[str, Any], criter
         return "precondition_or_memory", reasons
     if "rag_recall_passed" in failed:
         return "rag_retrieval", reasons
-    if "tool_selection_passed" in failed or "tool_args_passed" in failed or any(call.get("return_status") in {"validation_error", "runtime_error"} for call in _tool_calls(trace)):
+    if "tool_selection_passed" in failed or "workflow_constraints_passed" in failed or "tool_args_passed" in failed or any(
+        call.get("return_status") in {"validation_error", "runtime_error"} and not _is_workflow_guard(call)
+        for call in _tool_calls(trace)
+    ):
         return "tool_call", reasons
     if "artifact_format_passed" in failed or "delivery_status_passed" in failed:
         return "artifact_or_delivery", reasons
@@ -252,6 +325,7 @@ def evaluate_case(
     criteria["_required_memory_keys"] = [{"key": key} for key in required_keys]
     checks = [
         check_tool_selection(criteria, trace),
+        check_workflow_constraints(criteria, trace),
         check_tool_args(criteria, trace),
         check_rag_recall(criteria, trace),
         check_artifact_format(criteria, trace, root, run_dir),
