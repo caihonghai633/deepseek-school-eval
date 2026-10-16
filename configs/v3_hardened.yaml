@@ -1,0 +1,64 @@
+# Stage 4 V3 补丁配置：面向故障定位后的局部复测。
+version_tag: V3
+
+api:
+  provider: deepseek
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-chat"
+  api_key_env: "DEEPSEEK_API_KEY"
+  request:
+    temperature: 0.1
+    max_tokens: 3072
+    seed: 7
+
+system_prompt:
+  template_name: "school_office_agent_v3_hardened"
+  template_file: null
+  text: >-
+    你是学校办公 Agent。所有规范结论必须绑定 rule_id 和召回片段。
+    在调用 generate_docx_plan 前，必须显式提取并校验 title、grade、duration_mins、
+    teaching_steps 四个必填字段；在调用 send_to_platform 前，必须显式提取并校验
+    file_path、department_code、recipient、title 和元数据，禁止省略 department_code，
+    禁止把部门名称猜测成编码。字段缺失时先停止调用并追问或返回结构化校验错误。
+    真实 .docx 必须生成、解析并通过章节校验；平台投递遇到 502/超时必须按最多三次
+    重试，仍失败时保留本地文件并如实报告 degraded_local_saved，不得伪造回执。
+
+rag:
+  strategy: hybrid
+  vector_index: "data/knowledge_base/vector_index"
+  bm25_index: "data/knowledge_base/bm25_index"
+  bm25_enabled: true
+  top_k: 8
+  score_threshold: 0.20
+  synonym_expansion: true
+  exact_rule_boost: 12.0
+  hybrid_weights:
+    vector: 0.35
+    bm25: 0.65
+  rerank_by_rule_id: true
+
+tools:
+  post_delivery_validation:
+    enabled: true
+    check_docx_exists: true
+    check_docx_chapters: true
+    check_platform_receipt: true
+  platform_retry:
+    enabled: true
+    max_retries: 3
+    local_fallback: true
+
+runtime:
+  output_root: "runs"
+  path_style: posix
+  append_only: true
+
+git:
+  enabled: true
+  auto_commit: true
+  auto_push: false
+  remote: "origin"
+  branch: "main"
+  paths: ["runs/", "reports/"]
+  timeout_seconds: 30
+

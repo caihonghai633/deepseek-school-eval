@@ -1,0 +1,9 @@
+openai
+pydantic>=2.0
+pyyaml
+python-docx
+rank-bm25
+numpy
+pandas
+python-dotenv
+pytest

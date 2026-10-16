@@ -1,0 +1,142 @@
+{
+  "generated_at": "2026-10-16T16:37:50.952561+00:00",
+  "mode": "offline_deterministic_validation",
+  "selected_cases": {
+    "rag_retrieval": "TC-RAG-001",
+    "tool_call": "TC-TOOL-004",
+    "artifact_or_delivery": "TC-ERR-009"
+  },
+  "before_after": {
+    "rag_retrieval": {
+      "case_id": "TC-RAG-001",
+      "before_version": "V2",
+      "before_failure_rate": 1.0,
+      "before_diagnosed_stage": "rag_retrieval",
+      "after_version": "V3",
+      "after_failure_rate": 0.0,
+      "after_diagnosed_stage": "none",
+      "after_checks": {
+        "tool_selection_passed": true,
+        "tool_args_passed": true,
+        "rag_recall_passed": true,
+        "artifact_format_passed": true,
+        "delivery_status_passed": true,
+        "model_generation_passed": true
+      },
+      "tool_statuses": [
+        {
+          "name": "rag.search",
+          "return_status": "success"
+        },
+        {
+          "name": "document.generate_docx",
+          "return_status": "success"
+        },
+        {
+          "name": "document.inspect_docx",
+          "return_status": "success"
+        }
+      ]
+    },
+    "tool_call": {
+      "case_id": "TC-TOOL-004",
+      "before_version": "V2",
+      "before_failure_rate": 1.0,
+      "before_diagnosed_stage": "tool_call",
+      "after_version": "V3",
+      "after_failure_rate": 0.0,
+      "after_diagnosed_stage": "none",
+      "after_checks": {
+        "tool_selection_passed": true,
+        "tool_args_passed": true,
+        "rag_recall_passed": true,
+        "artifact_format_passed": true,
+        "delivery_status_passed": true,
+        "model_generation_passed": true
+      },
+      "tool_statuses": [
+        {
+          "name": "memory.read",
+          "return_status": "success"
+        },
+        {
+          "name": "rag.search",
+          "return_status": "success"
+        },
+        {
+          "name": "document.generate_docx",
+          "return_status": "success"
+        },
+        {
+          "name": "document.inspect_docx",
+          "return_status": "success"
+        },
+        {
+          "name": "academic_affairs.send",
+          "return_status": "success"
+        },
+        {
+          "name": "academic_affairs.verify_receipt",
+          "return_status": "success"
+        }
+      ]
+    },
+    "artifact_or_delivery": {
+      "case_id": "TC-ERR-009",
+      "before_version": "V2",
+      "before_failure_rate": 1.0,
+      "before_diagnosed_stage": "rag_retrieval",
+      "after_version": "V3",
+      "after_failure_rate": 0.0,
+      "after_diagnosed_stage": "none",
+      "after_checks": {
+        "tool_selection_passed": true,
+        "tool_args_passed": true,
+        "rag_recall_passed": true,
+        "artifact_format_passed": true,
+        "delivery_status_passed": true,
+        "model_generation_passed": true
+      },
+      "tool_statuses": [
+        {
+          "name": "memory.read",
+          "return_status": "success"
+        },
+        {
+          "name": "rag.search",
+          "return_status": "success"
+        },
+        {
+          "name": "document.generate_docx",
+          "return_status": "success"
+        },
+        {
+          "name": "document.inspect_docx",
+          "return_status": "success"
+        },
+        {
+          "name": "academic_affairs.send",
+          "return_status": "runtime_error"
+        },
+        {
+          "name": "academic_affairs.send",
+          "return_status": "success"
+        },
+        {
+          "name": "academic_affairs.verify_receipt",
+          "return_status": "success"
+        }
+      ]
+    }
+  },
+  "v3_run_ids": {
+    "rag_retrieval": "run_20261016T163750719706Z_v3_tc-rag-001_attempt_1_34cd56aa",
+    "tool_call": "run_20261016T163750801421Z_v3_tc-tool-004_attempt_1_dba18936",
+    "artifact_or_delivery": "run_20261016T163750879723Z_v3_tc-err-009_attempt_1_eb1b4893"
+  },
+  "notes": [
+    "修复前指标来自 Stage 3 去重后的 V2 原始记录。",
+    "V3 复测使用相同 TestCaseSchema、Runner 和确定性 Checkers，未调用外部 API。",
+    "artifact_or_delivery 的前后错误率按 delivery_status_passed 单项统计，避免上游 RAG 失败混淆。"
+  ]
+}

@@ -1,0 +1,51 @@
+# Stage 1 配置模板：V1 基线。只描述可审计参数，不包含 API Key。
+version_tag: V1
+
+api:
+  provider: deepseek
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-chat"
+  api_key_env: "DEEPSEEK_API_KEY"
+  request:
+    temperature: 0.2
+    max_tokens: 2048
+    seed: 7
+
+system_prompt:
+  template_name: "school_office_agent_v1_baseline"
+  template_file: null
+  text: >-
+    你是学校办公 Agent。必须遵守已召回的学校规范，先确认任务边界，再按工具
+    协议生成真实文件并回传可验证的交付状态。不得虚构检索结果、文件路径或发送成功。
+
+rag:
+  strategy: vector
+  vector_index: "data/knowledge_base/vector_index"
+  bm25_enabled: false
+  top_k: 2
+  score_threshold: 0.55
+  hybrid_weights:
+    vector: 1.0
+    bm25: 0.0
+
+tools:
+  post_delivery_validation:
+    enabled: false
+    check_docx_exists: false
+    check_docx_chapters: false
+    check_platform_receipt: false
+
+runtime:
+  output_root: "runs"
+  path_style: posix
+  append_only: true
+
+git:
+  enabled: true
+  auto_commit: true
+  auto_push: false
+  remote: "origin"
+  branch: "main"
+  paths: ["runs/", "reports/"]
+  timeout_seconds: 30
+

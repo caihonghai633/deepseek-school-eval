@@ -1,0 +1,80 @@
+{
+  "total_records": 104,
+  "by_version": {
+    "V1": {
+      "total_cases": 52,
+      "passed_cases": 5,
+      "success_rate": 0.0962,
+      "by_category": {
+        "基础指令与多轮": {
+          "total": 13,
+          "passed": 3
+        },
+        "RAG与跨会话记忆": {
+          "total": 13,
+          "passed": 0
+        },
+        "工具调用与文件处理": {
+          "total": 13,
+          "passed": 0
+        },
+        "异常输入与冲突恢复": {
+          "total": 13,
+          "passed": 2
+        }
+      },
+      "failure_stage_counts": {
+        "artifact_or_delivery": 4,
+        "rag_retrieval": 42,
+        "tool_call": 1
+      },
+      "prompt_tokens": 430236,
+      "completion_tokens": 62037,
+      "estimated_cost_usd": 0.18870678,
+      "average_duration_ms": 13347.835
+    },
+    "V2": {
+      "total_cases": 52,
+      "passed_cases": 3,
+      "success_rate": 0.0577,
+      "by_category": {
+        "基础指令与多轮": {
+          "total": 13,
+          "passed": 0
+        },
+        "RAG与跨会话记忆": {
+          "total": 13,
+          "passed": 1
+        },
+        "工具调用与文件处理": {
+          "total": 13,
+          "passed": 0
+        },
+        "异常输入与冲突恢复": {
+          "total": 13,
+          "passed": 2
+        }
+      },
+      "failure_stage_counts": {
+        "precondition_or_memory": 1,
+        "artifact_or_delivery": 7,
+        "rag_retrieval": 37,
+        "tool_call": 4
+      },
+      "prompt_tokens": 484508,
+      "completion_tokens": 62830,
+      "estimated_cost_usd": 0.20477524,
+      "average_duration_ms": 12255.053
+    }
+  },
+  "comparison": {
+    "success_rate_delta_v2_minus_v1": -0.0385,
+    "passed_cases_delta_v2_minus_v1": -2,
+    "failure_stage_delta_v2_minus_v1": {
+      "tool_call": 3,
+      "rag_retrieval": -5,
+      "artifact_or_delivery": 3,
+      "precondition_or_memory": 1
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": "1.0",
+  "memories": [
+    {
+      "memory_id": "mem-teacher-format-001",
+      "key": "preferred_lesson_plan_format",
+      "value": {
+        "sections": ["教学目标", "教学重难点", "安全措施与见习生安排", "教学过程", "课后反思"],
+        "style": "表格化小节，先列课时元数据"
+      },
+      "scope": "user",
+      "source": "teacher_profile"
+    },
+    {
+      "memory_id": "mem-teacher-concise-002",
+      "key": "preferred_lesson_plan_length",
+      "value": "正文控制在 1200 至 1600 个汉字，保留可执行步骤",
+      "scope": "user",
+      "source": "teacher_profile"
+    },
+    {
+      "memory_id": "mem-class-701-injury-003",
+      "key": "class_701_safety_constraint",
+      "value": "学生S-07处于半月板康复期，体育课不得跑跳或对抗，安排观察记录见习",
+      "scope": "school",
+      "source": "approved_health_accommodation"
+    },
+    {
+      "memory_id": "mem-class-802-allergy-004",
+      "key": "class_802_lab_constraint",
+      "value": "学生S-12对乳胶过敏，实验材料需改用无乳胶手套并由教师分发",
+      "scope": "school",
+      "source": "approved_health_accommodation"
+    },
+    {
+      "memory_id": "mem-recipient-jwc-005",
+      "key": "default_academic_recipient",
+      "value": {"department_code": "JWC", "recipient": "教务处李老师", "platform": "教学管理平台"},
+      "scope": "user",
+      "source": "teacher_profile"
+    },
+    {
+      "memory_id": "mem-privacy-006",
+      "key": "student_privacy_preference",
+      "value": "对外材料统一使用学生编号，不保留姓名、学号和诊断细节",
+      "scope": "user",
+      "source": "privacy_acknowledgement"
+    },
+    {
+      "memory_id": "mem-grade7-title-007",
+      "key": "grade_7_filename_style",
+      "value": "七年级_学科_课题.docx，不添加日期前缀",
+      "scope": "user",
+      "source": "teacher_profile"
+    },
+    {
+      "memory_id": "mem-meeting-008",
+      "key": "meeting_minutes_style",
+      "value": "纪要结尾固定列责任人、截止日期和待确认事项",
+      "scope": "user",
+      "source": "teacher_profile"
+    }
+  ]
+}
